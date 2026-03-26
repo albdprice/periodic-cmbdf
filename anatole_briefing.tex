@@ -1,0 +1,94 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+
+\pagestyle{empty}
+\setlength{\parskip}{6pt}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+
+{\Large \textbf{p-cMBDF: Progress Update for Anatole}}\\[2pt]
+{\normalsize Alastair Price \hfill \today}
+
+\vspace{4pt}
+\hrule
+\vspace{8pt}
+
+\textbf{Summary.} We have extended cMBDF to periodic systems (p-cMBDF), validated it on matbench benchmarks, and implemented true 4-body and 5-body geometric invariants. The representation maintains a constant 40 features per atom regardless of composition. On matbench mp\_e\_form (89k structures, 84 elements, 5-fold CV), p-cMBDF achieves 0.222 eV/atom with Laplacian KRR, improving to 0.209 with optimized hyperparameters (50 dim). A linear kernel gives 0.591, and the 2.6x ratio to the Laplacian quantifies the residual nonlinearity in the features.
+
+\vspace{4pt}
+
+\textbf{What we built.} Starting from Danish's molecular cMBDF code, the periodic extension adds:
+\begin{itemize}[nosep]
+    \item Smooth cosine cutoff (mandatory for PBC, optional for molecules)
+    \item Numba-compiled periodic neighbor lists (4.3x faster than ASE)
+    \item Element-specific radial basis using vdW radii as Gaussian widths
+    \item Per-element normalization (divides features by element-specific training-set mean)
+    \item True 4-body and 5-body invariants (see below)
+    \item Differentiable PyTorch implementation with GPU acceleration
+    \item Unified API: \texttt{generate\_pcmbdf(max\_body=3/4/5, backend='numba'/'torch')}
+\end{itemize}
+
+\vspace{4pt}
+
+\textbf{Body order mathematics.} cMBDF is parametrized by three integers ($\nu$, $m$, $n$) controlling body order, derivative order, and weighting function. The standard 40 features use $\nu \leq 3$, $m \leq 4$, $n \leq 4$. We added:
+
+\textit{4-body (solid angle, $\nu = 4$):} For each triplet of neighbors $(j,k,l)$ of atom $i$, we compute the solid angle $\Omega$ subtended by the triangle as seen from $i$ via the Van Oosterom-Strackee formula:
+$$\Omega = 2\arctan\frac{|\hat{r}_{ij} \cdot (\hat{r}_{ik} \times \hat{r}_{il})|}{1 + \hat{r}_{ij}\cdot\hat{r}_{ik} + \hat{r}_{ij}\cdot\hat{r}_{il} + \hat{r}_{ik}\cdot\hat{r}_{il}}$$
+This is a proper rotational invariant (does not depend on atom labeling). Convolved with Hermite-Gaussian basis functions on $[0, 2\pi]$. Adds 20 features (60 total). Cost: $\mathcal{O}(N_\text{neigh}^3)$ per atom.
+
+\textit{5-body (out-of-plane angle, $\nu = 5$):} For quintuplets $(i,j,k,l,m)$, the angle between $\mathbf{r}_{im}$ and the plane defined by $(\mathbf{r}_{ij}, \mathbf{r}_{ik}, \mathbf{r}_{il})$, symmetrized over all four choices of the out-of-plane atom. Adds 12 features (72 total). Cost: $\mathcal{O}(N_\text{neigh}^4)$ per atom. Toggleable, off by default.
+
+\vspace{4pt}
+
+\textbf{Key results.}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccl}
+\toprule
+Result & Value & Dim & Notes \\
+\midrule
+mp\_e\_form (5-fold CV) & 0.222 eV/at & 40 & Standard config \\
+mp\_e\_form (optimized) & 0.209 eV/at & 50 & nAs=6, rcut=5\AA \\
+Linear kernel (5-fold) & 0.591 eV/at & 40 & Ratio to Laplacian: 2.6x \\
+Old cMBDF on solids & 0.313 eV/at & 40 & No PBC \\
+p-cMBDF on same solids & 0.175 eV/at & 40 & 44\% improvement \\
+QM9 atomization (local) & 1.37 kcal/mol & 40 & N=8k, $\delta$-kernel \\
+Rep generation (89k) & 53 seconds & 40 & Numba, parallel \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Configuration analysis.} Per-element normalization is the single biggest improvement (24\%), more impactful than adding 4-body or 5-body terms. At current training sizes, the normalized 3-body (40d) representation beats the normalized 4-body (60d) because the extra features lead to overfitting. The 5-body ($\mathcal{O}(N^5)$) is 300x slower to generate and shows diminishing returns.
+
+\textbf{Hyperparameter sweeps.} We swept cutoff radius, derivative order, angular harmonics, ATM damping, and radial weighting functions. The biggest win was increasing angular harmonics from cos(1-4$\theta$) to cos(1-6$\theta$), which combined with a tighter cutoff (5\AA\ instead of 6\AA) and slightly stronger ATM damping (2.5 instead of 2.0) gives the 0.209 result at 50 dimensions.
+
+\textbf{Feature analysis.} Interesting contrast between molecules and solids: on QM9, 17/40 features are removable without accuracy loss (short-range dominates). On MP solids, 0/40 are removable (all features contribute, long-range features are more important). The representation is well-designed for solids with no wasted capacity.
+
+\textbf{Species scaling.} p-cMBDF is the only hand-crafted representation with $\mathcal{O}(1)$ species scaling. SOAP reaches 244,140 dimensions at 78 species and kernel methods diverge. This is the fundamental advantage for chemically diverse datasets.
+
+\textbf{What is left to do.}
+\begin{itemize}[nosep]
+    \item Polynomial kernel results (degree 2, 3) running on freya, will complete the kernel comparison table
+    \item Joint hyperparameter optimization (Bayesian opt over all continuous params)
+    \item Property-specific cutoff optimization (band gap may need different cutoff than formation energy)
+    \item Extending hermite\_polynomial beyond degree 5 to test higher derivative orders
+    \item Integration with aPBE0/a-nLanE for solid-state adaptive DFT (the application)
+    \item Paper figures and tables are drafted, need Anatole's review
+    \item Code needs to be pushed to a public repo
+\end{itemize}
+
+\textbf{Open questions for discussion.}
+\begin{itemize}[nosep]
+    \item The linear kernel ratio of 2.6 -- is there a way to improve the representation itself to bring this closer to 1.0? More body orders did not help (overfitting). Better weighting functions?
+    \item Should we pursue the GNN direction (p-cMBDF as input features to a simple GNN)? Initial results on perovskites were promising (0.096 eV/atom).
+    \item Paper framing: compact kernel representation, not competing with GNNs on accuracy. The SVM paragraph about optimality guarantees, data efficiency, and interpretability sets this up.
+\end{itemize}
+
+\end{document}

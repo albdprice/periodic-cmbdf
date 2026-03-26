@@ -1,0 +1,26 @@
+# Data files (large, not for git)
+data/*.npz
+data/*.tar.bz2
+data/qm9_xyz/
+
+# Python cache
+__pycache__/
+*.pyc
+cMBDF/__pycache__/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Papers (PDFs of references, not our draft)
+034106_1_5.0152215.pdf
+khan-von-lilienfeld-2025-*.pdf
+
+# MBDF original repo (reference only)
+MBDF/
+__pycache__/
+*.npy
+*.pyc
